@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">SINGO Delivery</string>
+    <string name="title_activity_main">SINGO Delivery</string>
+    <string name="package_name">com.singo.delivery</string>
+    <string name="custom_url_scheme">com.singo.delivery</string>
+</resources>
