@@ -7,13 +7,15 @@ const getApiBaseUrl = (): string => {
   if (isNative) {
     return (
       import.meta.env.VITE_API_URL_MOBILE ||
-      "http://10.27.110.144:3000"
+      "https://delivery-singo-backend.onrender.com"
     ).replace(/\/$/, "");
   }
 
-  // Web browser fallback
-  const host = window.location.hostname || "localhost";
-  return `http://${host}:3000`;
+  // Web browser: use the deployed HTTPS backend
+  return (
+    import.meta.env.VITE_API_URL ||
+    "https://delivery-singo-backend.onrender.com"
+  ).replace(/\/$/, "");
 };
 
 export const API_BASE_URL = getApiBaseUrl();
@@ -27,7 +29,6 @@ const api = axios.create({
   },
 });
 
-// ✅ Request Interceptor
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem("token");
 
@@ -39,18 +40,20 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
-// ✅ Response Interceptor
 api.interceptors.response.use(
   (response) => {
     console.log("✅ Response:", response.status);
     return response;
   },
   async (error) => {
-    console.error("❌ Error:", error.response?.status, error.response?.data);
+    console.error(
+      "❌ Error:",
+      error.response?.status,
+      error.response?.data || error.message
+    );
 
     const originalRequest = error.config;
 
-    // ✅ Handle 401 - Token Expired
     if (error.response?.status === 401 && !originalRequest._retry) {
       originalRequest._retry = true;
 
@@ -68,14 +71,15 @@ api.interceptors.response.use(
         );
 
         const newAccessToken = res.data.accessToken || res.data.token;
+
         if (newAccessToken) {
           localStorage.setItem("token", newAccessToken);
         }
+
         if (res.data.refreshToken) {
           localStorage.setItem("refreshToken", res.data.refreshToken);
         }
 
-        // ✅ Retry original request with new token
         originalRequest.headers.Authorization = `Bearer ${newAccessToken}`;
         return axios(originalRequest);
       } catch (refreshError) {
