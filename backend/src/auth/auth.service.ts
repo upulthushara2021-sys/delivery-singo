@@ -37,19 +37,53 @@ export class AuthService implements OnModuleInit {
     private readonly jwtService: JwtService,
   ) {}
 
+  
   async onModuleInit() {
-    const adminEmail = 'admin@gmail.com';
-    const existingAdmin = await this.userRepo.findOne({ where: { email: adminEmail } });
-    if (!existingAdmin) {
+    const oldAdminEmail = 'admin@gmail.com';
+    const newAdminEmail = 'admindelivery-singo@gmail.com';
+
+    const existingAdmin = await this.userRepo.findOne({
+      where: { email: oldAdminEmail },
+    });
+
+    if (existingAdmin) {
+      // Update the existing administrator instead of creating a duplicate.
+      const emailAlreadyUsed = await this.userRepo.findOne({
+        where: { email: newAdminEmail },
+      });
+
+      if (emailAlreadyUsed && emailAlreadyUsed.id !== existingAdmin.id) {
+        console.error(
+          'Admin email update stopped: the new email already belongs to another account.',
+        );
+        return;
+      }
+
+      existingAdmin.email = newAdminEmail;
+      await this.userRepo.save(existingAdmin);
+
+      console.log(`Administrator email updated to ${newAdminEmail}`);
+      return;
+    }
+
+    // Create the default admin only if neither account exists.
+    const newAdmin = await this.userRepo.findOne({
+      where: { email: newAdminEmail },
+    });
+
+    if (!newAdmin) {
       const hashed = await bcrypt.hash('password', 10);
+
       const admin = this.userRepo.create({
         name: 'System Admin',
-        email: adminEmail,
+        email: newAdminEmail,
         password: hashed,
         role: UserRole.ADMIN,
       });
+
       await this.userRepo.save(admin);
-      console.log('✅ Default admin account initialized: admin@gmail.com / password');
+
+      console.log('Default administrator account initialized.');
     }
   }
 
