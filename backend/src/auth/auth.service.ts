@@ -119,6 +119,78 @@ export class AuthService implements OnModuleInit {
     return this.userRepo.save(admin);
   }
 
+  async registerBranchAdmin(body: any) {
+    const { name, email, mobile, password, branchId } = body;
+
+    const trimmedName = String(name || '').trim();
+    const trimmedEmail = String(email || '').trim().toLowerCase();
+    const trimmedMobile = String(mobile || '').trim();
+
+    if (
+      !trimmedName ||
+      !trimmedEmail ||
+      !password ||
+      !branchId
+    ) {
+      throw new BadRequestException(
+        'Name, email, password and branch are required.',
+      );
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+    if (!emailRegex.test(trimmedEmail)) {
+      throw new BadRequestException('Please enter a valid email address.');
+    }
+
+    const existingUser = await this.userRepo.findOne({
+      where: { email: trimmedEmail },
+    });
+
+    if (existingUser) {
+      throw new BadRequestException('Email already registered.');
+    }
+
+    const branch = await this.branchRepo.findOne({
+      where: {
+        id: Number(branchId),
+        isActive: true,
+      },
+    });
+
+    if (!branch) {
+      throw new BadRequestException('Selected branch is not available.');
+    }
+
+    const hashed = await bcrypt.hash(password, 10);
+
+    const branchAdmin = this.userRepo.create({
+      name: trimmedName,
+      email: trimmedEmail,
+      mobile: trimmedMobile || undefined,
+      password: hashed,
+      role: UserRole.BRANCH_ADMIN,
+      branchId: branch.id,
+      branch,
+    });
+
+    const savedUser = await this.userRepo.save(branchAdmin);
+
+    return {
+      user: {
+        id: savedUser.id,
+        name: savedUser.name,
+        email: savedUser.email,
+        mobile: savedUser.mobile,
+        role: savedUser.role,
+        branchId: savedUser.branchId,
+        branch: branch.name,
+        district: branch.district,
+      },
+      message: 'Branch admin registered successfully.',
+    };
+  }
+
   async registerCompany(body: any) {
     const { companyName, email, mobile, address, password } = body;
 

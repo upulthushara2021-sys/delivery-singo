@@ -18,3 +18,5 @@ coverage/
 # Editor settings
 .idea/
 .vscode/
+
+backend/reset-admin-password.cjs

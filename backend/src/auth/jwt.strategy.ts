@@ -1,20 +1,26 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
   constructor() {
+    const secret = process.env.JWT_SECRET;
+
+    if (!secret) {
+      throw new Error('JWT_SECRET environment variable is required');
+    }
+
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
-      secretOrKey: process.env.JWT_SECRET || 'manjula-19820320-upul-19720120',
-      ignoreExpiration: false, // ✅ Force token validation
+      secretOrKey: secret,
+      ignoreExpiration: false,
     });
   }
 
   async validate(payload: any) {
     if (!payload) {
-      throw new Error('JWT payload is missing');
+      throw new UnauthorizedException('JWT payload is missing');
     }
 
     return {
