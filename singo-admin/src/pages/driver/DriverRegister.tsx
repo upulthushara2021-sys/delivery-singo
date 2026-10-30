@@ -75,12 +75,10 @@ export default function DriverRegister() {
         vehicleType,
       };
 
-      const res = await api.post("/auth/register-driver", payload);
+      await api.post("/auth/register-driver", payload);
 
       alert(
-        res.data.assignedDeliveries
-          ? `Driver registered successfully. ${res.data.assignedDeliveries} waiting delivery(s) assigned automatically.`
-          : "Driver registered successfully. No waiting deliveries were available."
+        "Driver registered successfully. The admin must assign deliveries manually."
       );
 
       navigate("/driver/login");

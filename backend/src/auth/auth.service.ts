@@ -5,14 +5,14 @@ import {
   OnModuleInit,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { IsNull, Repository } from 'typeorm';
+import { Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import { JwtService } from '@nestjs/jwt';
 
 import { User, UserRole } from '../users/user.entity';
 import { Company } from '../companies/company.entity';
-import { Delivery, DeliveryStatus } from '../deliveries/delivery.entity';
-import { DeliveryAssignment, DeliveryAssignmentType } from '../deliveries/delivery-assignment.entity';
+import { Delivery } from '../deliveries/delivery.entity';
+import { DeliveryAssignment } from '../deliveries/delivery-assignment.entity';
 import { Branch } from '../branches/branch.entity';
 import { VehicleType } from '../users/user.entity';
 
@@ -264,6 +264,7 @@ export class AuthService implements OnModuleInit {
     };
   }
 
+
   async registerDriver(body: any) {
     const { name, email, mobile, password, branchId, vehicleType } = body;
 
@@ -271,34 +272,58 @@ export class AuthService implements OnModuleInit {
     const trimmedEmail = String(email || '').trim().toLowerCase();
     const trimmedMobile = String(mobile || '').trim();
 
-    if (!trimmedName || !trimmedEmail || !trimmedMobile || !password || !branchId || !vehicleType) {
+    // Validate required fields
+    if (
+      !trimmedName ||
+      !trimmedEmail ||
+      !trimmedMobile ||
+      !password ||
+      !branchId ||
+      !vehicleType
+    ) {
       throw new BadRequestException(
         'All fields (Driver Name, Email, Mobile, Password, Branch, and Vehicle) are required.',
       );
     }
 
+    // Validate email address
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
     if (!emailRegex.test(trimmedEmail)) {
-      throw new BadRequestException('Please enter a valid email address.');
+      throw new BadRequestException(
+        'Please enter a valid email address.',
+      );
     }
 
+    // Validate mobile number
     const cleanMobile = trimmedMobile.replace(/\D/g, '');
+
     if (cleanMobile.length !== 10) {
-      throw new BadRequestException('Mobile number must be exactly 10 digits (e.g. 0712345678).');
+      throw new BadRequestException(
+        'Mobile number must be exactly 10 digits (e.g. 0712345678).',
+      );
     }
 
+    // Validate vehicle type
     if (!Object.values(VehicleType).includes(vehicleType)) {
       throw new BadRequestException('Invalid vehicle type');
     }
 
+    // Find active branch
     const branch = await this.branchRepo.findOne({
-      where: { id: Number(branchId), isActive: true },
+      where: {
+        id: Number(branchId),
+        isActive: true,
+      },
     });
 
     if (!branch) {
-      throw new BadRequestException('Selected branch is not available');
+      throw new BadRequestException(
+        'Selected branch is not available',
+      );
     }
 
+    // Check for duplicate email
     const existingUser = await this.userRepo.findOne({
       where: { email: trimmedEmail },
     });
@@ -307,8 +332,10 @@ export class AuthService implements OnModuleInit {
       throw new BadRequestException('Email already registered');
     }
 
+    // Hash password
     const hashed = await bcrypt.hash(password, 10);
 
+    // Create driver
     const user = this.userRepo.create({
       name: trimmedName,
       email: trimmedEmail,
@@ -322,32 +349,8 @@ export class AuthService implements OnModuleInit {
 
     const savedUser = await this.userRepo.save(user);
 
-    const waitingDeliveries = await this.deliveryRepo.find({
-      where: {
-        status: DeliveryStatus.PENDING,
-        driverId: IsNull(),
-      },
-    });
-
-    if (waitingDeliveries.length > 0) {
-      await this.deliveryRepo.manager.transaction(async (manager) => {
-        for (const delivery of waitingDeliveries) {
-          delivery.driverId = savedUser.id;
-          delivery.status = DeliveryStatus.ASSIGNED;
-          await manager.save(Delivery, delivery);
-          await manager.save(
-            DeliveryAssignment,
-            this.assignmentRepo.create({
-              deliveryId: delivery.id,
-              delivery,
-              driverId: savedUser.id,
-              driver: savedUser,
-              assignmentType: DeliveryAssignmentType.PICKUP,
-            }),
-          );
-        }
-      });
-    }
+    // Do not automatically assign deliveries.
+    // The admin will assign deliveries manually.
 
     return {
       user: {
@@ -361,8 +364,9 @@ export class AuthService implements OnModuleInit {
         district: branch.district,
         vehicleType: savedUser.vehicleType,
       },
-      assignedDeliveries: waitingDeliveries.length,
-      message: 'Driver registered successfully',
+      assignedDeliveries: 0,
+      message:
+        'Driver registered successfully. Deliveries must be assigned manually by an admin.',
     };
   }
 
@@ -393,6 +397,7 @@ export class AuthService implements OnModuleInit {
         userId: user.id,
         role: user.role,
         companyId: user.companyId,
+        branchId: user.branchId,
       },
       { expiresIn: '15m' }
     );
