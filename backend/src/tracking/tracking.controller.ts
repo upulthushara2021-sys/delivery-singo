@@ -47,8 +47,9 @@ export class TrackingController {
     return delivery;
   }
 
+
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('ADMIN', 'DRIVER', 'COMPANY')
+  @Roles('ADMIN', 'BRANCH_ADMIN', 'DRIVER')
   @Patch('by-number/:trackingNumber/branch')
   receiveAtBranch(
     @Req() req: any,
@@ -58,9 +59,16 @@ export class TrackingController {
     return this.trackingService.receiveAtBranch(
       trackingNumber,
       Number(branchId),
-      req.user?.role === 'DRIVER' ? req.user.userId : undefined,
+      {
+        userId: Number(req.user.userId),
+        role: req.user.role,
+        branchId: req.user.branchId
+          ? Number(req.user.branchId)
+          : undefined,
+      },
     );
   }
+
 
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('COMPANY')
@@ -76,19 +84,5 @@ export class TrackingController {
   @Get('drivers/locations')
   getAllDriverLocations(): DriverLocation[] {
     return this.trackingService.getAllDriverLocations();
-  }
-
-  // Optional: endpoint to update location for a delivery if you prefer HTTP updates
-  @Patch('delivery/:id/location')
-  async updateDeliveryLocation(
-    @Param('id') id: number,
-    @Body() body: { driverId?: number; latitude: number; longitude: number },
-  ) {
-    const driverId = body.driverId || 0;
-    const lat = Number(body.latitude);
-    const lng = Number(body.longitude);
-
-    const location = this.trackingService.updateDriverLocation(driverId, id, lat, lng);
-    return { success: true, location };
   }
 }

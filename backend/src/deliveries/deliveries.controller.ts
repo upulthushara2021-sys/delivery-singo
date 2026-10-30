@@ -69,21 +69,32 @@ export class DeliveriesController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('DRIVER')
   @Patch('deliveries/:id/status')
-  updateStatus(@Param('id') id: string, @Body() body: UpdateStatusDto) {
-    return this.deliveriesService.updateStatus(Number(id), body.status);
+  updateStatus(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: UpdateStatusDto,
+  ) {
+    return this.deliveriesService.updateStatus(
+      Number(id),
+      body.status,
+      req.user.userId,
+    );
   }
 
   // DRIVER RETURN DELIVERY
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('DRIVER')
   @Patch('deliveries/:id/return')
-  returnDelivery(@Param('id') id: string) {
-    return this.deliveriesService.returnDelivery(Number(id));
+  returnDelivery(@Req() req: any, @Param('id') id: string) {
+    return this.deliveriesService.returnDelivery(
+      Number(id),
+      req.user.userId,
+    );
   }
 
   // Driver or branch staff enters a delivery with a tracking number and branch
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('ADMIN', 'DRIVER', 'COMPANY')
+  @Roles('ADMIN', 'BRANCH_ADMIN', 'DRIVER')
   @Post('deliveries/:id/enter')
   async enterDelivery(
     @Req() req: any,

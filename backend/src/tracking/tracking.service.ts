@@ -6,7 +6,11 @@ import { Branch } from '../branches/branch.entity';
 import { DeliveryAssignment } from '../deliveries/delivery-assignment.entity';
 import { DeliveryAssignmentType } from '../deliveries/delivery-assignment.entity';
 import { User, UserRole } from '../users/user.entity';
-import { NotFoundException, BadRequestException } from '@nestjs/common';
+import {
+  NotFoundException,
+  BadRequestException,
+  ForbiddenException,
+} from '@nestjs/common';
 
 export interface DriverLocation {
   driverId: number;
@@ -73,44 +77,77 @@ export class TrackingService {
     return Array.from(this.driverLocations.values());
   }
 
+
   async receiveAtBranch(
     trackingNumber: string,
     branchId: number,
-    receivingUserId?: number,
+    actor: {
+      userId: number;
+      role: UserRole;
+      branchId?: number;
+    },
   ) {
+    if (!Number.isInteger(branchId) || branchId <= 0) {
+      throw new BadRequestException('A valid branch is required');
+    }
+
     const delivery = await this.deliveryRepo.findOne({
       where: { trackingNumber },
-      relations: ['driver', 'assignments', 'assignments.driver'],
+      relations: ['driver'],
     });
-    if (!delivery) throw new NotFoundException('Tracking number not found');
 
-    const branch = await this.branchRepo.findOne({ where: { id: branchId, isActive: true } });
-    if (!branch) throw new BadRequestException('Branch not found');
+    if (!delivery) {
+      throw new NotFoundException('Tracking number not found');
+    }
+
+    const branch = await this.branchRepo.findOne({
+      where: { id: branchId, isActive: true },
+    });
+
+    if (!branch) {
+      throw new BadRequestException('Active branch not found');
+    }
+
+    // Main ADMIN can receive at any active branch.
+    if (actor.role === UserRole.ADMIN) {
+      // No additional branch restriction.
+    }
+
+    // BRANCH_ADMIN can receive only at their assigned branch.
+    else if (actor.role === UserRole.BRANCH_ADMIN) {
+      if (!actor.branchId || actor.branchId !== branch.id) {
+        throw new ForbiddenException(
+          'You can only receive deliveries at your assigned branch',
+        );
+      }
+    }
+
+    // DRIVER must be assigned to this delivery and belong to
+    // the branch where the delivery is being received.
+    else if (actor.role === UserRole.DRIVER) {
+      if (delivery.driverId !== actor.userId) {
+        throw new ForbiddenException(
+          'You are not assigned to this delivery',
+        );
+      }
+
+      if (!actor.branchId || actor.branchId !== branch.id) {
+        throw new ForbiddenException(
+          'You can only receive deliveries at your assigned branch',
+        );
+      }
+    }
+
+    // No other role is permitted.
+    else {
+      throw new ForbiddenException(
+        'You are not allowed to receive deliveries at a branch',
+      );
+    }
 
     delivery.currentDistrict = branch.district;
     delivery.currentBranch = branch.name;
     delivery.status = DeliveryStatus.BRANCH_RECEIVED;
-
-    if (receivingUserId) {
-      const driver = await this.userRepo.findOne({
-        where: { id: receivingUserId, role: UserRole.DRIVER },
-      });
-
-      if (driver) {
-        const latestAssignment = [...(delivery.assignments || [])]
-          .sort((first, second) => second.assignedAt.getTime() - first.assignedAt.getTime())[0];
-
-        if (!latestAssignment || latestAssignment.driverId !== driver.id) {
-          await this.assignmentRepo.save(this.assignmentRepo.create({
-            deliveryId: delivery.id,
-            delivery,
-            driverId: driver.id,
-            driver,
-            assignmentType: DeliveryAssignmentType.TRANSIT,
-          }));
-        }
-      }
-    }
 
     return this.deliveryRepo.save(delivery);
   }

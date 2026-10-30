@@ -11,6 +11,7 @@ import { Blacklist } from '../blacklist/blacklist.entity';
 import { User, UserRole } from '../users/user.entity';
 import { Company } from '../companies/company.entity';
 import { DeliveryAssignment, DeliveryAssignmentType } from './delivery-assignment.entity';
+import { Branch } from '../branches/branch.entity';
 
 @Injectable()
 export class DeliveriesService {
@@ -29,6 +30,9 @@ export class DeliveriesService {
 
     @InjectRepository(Company)
     private companyRepo: Repository<Company>,
+
+    @InjectRepository(Branch)
+    private branchRepo: Repository<Branch>,
   ) {}
 
   private normalizeCustomerMobile(customerMobile: string): string {
@@ -337,7 +341,12 @@ export class DeliveriesService {
   }
 
   // DRIVER UPDATE STATUS
-  async updateStatus(id: number, status: DeliveryStatus) {
+
+  async updateStatus(
+    id: number,
+    status: DeliveryStatus,
+    driverId: number,
+  ) {
     const delivery = await this.deliveryRepo.findOne({
       where: { id },
     });
@@ -346,18 +355,30 @@ export class DeliveriesService {
       throw new NotFoundException('Delivery not found');
     }
 
+    if (delivery.driverId !== driverId) {
+      throw new BadRequestException(
+        'You are not assigned to this delivery',
+      );
+    }
+
     delivery.status = status;
     return this.deliveryRepo.save(delivery);
   }
 
   // DRIVER RETURN DELIVERY (only for COD)
-  async returnDelivery(id: number) {
+  async returnDelivery(id: number, driverId: number) {
     const delivery = await this.deliveryRepo.findOne({
       where: { id },
     });
 
     if (!delivery) {
       throw new NotFoundException('Delivery not found');
+    }
+
+    if (delivery.driverId !== driverId) {
+      throw new BadRequestException(
+        'You are not assigned to this delivery',
+      );
     }
 
     // Only COD can be returned
@@ -406,9 +427,22 @@ export class DeliveriesService {
       throw new NotFoundException('Delivery not found');
     }
 
-    // Optionally enforce that only the assigned driver can update location
-    if (delivery.driverId && delivery.driverId !== driverId) {
-      throw new BadRequestException('Driver not assigned to this delivery');
+    // Only the assigned driver can update this delivery's location
+    if (delivery.driverId !== driverId) {
+      throw new BadRequestException(
+        'You are not assigned to this delivery',
+      );
+    }
+
+    if (
+      !Number.isFinite(latitude) ||
+      !Number.isFinite(longitude) ||
+      latitude < -90 ||
+      latitude > 90 ||
+      longitude < -180 ||
+      longitude > 180
+    ) {
+      throw new BadRequestException('Invalid location coordinates');
     }
 
     // Only update if delivery is in an allowed status (business rule)
