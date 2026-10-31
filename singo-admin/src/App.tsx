@@ -26,6 +26,7 @@ import DriversPage from "./pages/admin/Drivers";
 import CompaniesPage from "./pages/admin/Companies";
 import DeliveriesPage from "./pages/admin/Deliveries";
 import BranchesPage from "./pages/admin/Branches";
+import BranchDashboard from "./pages/admin/BranchDashboard";
 
 import ProtectedRoute from "./router/ProtectedRoute";
 
@@ -106,6 +107,14 @@ function App() {
           }
         />
         <Route
+          path="/branch/dashboard"
+          element={
+            <ProtectedRoute role="BRANCH_ADMIN">
+              <BranchDashboard />
+            </ProtectedRoute>
+          }
+        />
+        <Route
           path="/admin/dashboard/companies"
           element={
             <ProtectedRoute role="ADMIN">
@@ -140,7 +149,7 @@ function App() {
         <Route
           path="/admin/dashboard/create-delivery"
           element={
-            <ProtectedRoute role="ADMIN">
+            <ProtectedRoute role={["ADMIN", "BRANCH_ADMIN"]}>
               <CreateDelivery />
             </ProtectedRoute>
           }
@@ -172,7 +181,7 @@ function App() {
         <Route
           path="/admin/dashboard/tracking"
           element={
-            <ProtectedRoute role="ADMIN">
+            <ProtectedRoute role={["ADMIN", "BRANCH_ADMIN"]}>
               <AdminTracking />
             </ProtectedRoute>
           }

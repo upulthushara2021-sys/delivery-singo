@@ -60,7 +60,7 @@ export class AdminController {
 
   // GET ALL COMPANIES WITH DETAILS (WITH DELIVERY CHARGE)
   @Get('companies')
-  @Roles('ADMIN')
+  @Roles('ADMIN','BRANCH_ADMIN')
   async companies() {
     return this.adminService.getAllCompanies();
   }

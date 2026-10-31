@@ -436,7 +436,9 @@ export default function DeliveriesPage() {
             <option value="PENDING">Pending</option>
             <option value="ASSIGNED">Assigned</option>
             <option value="PICKED_UP">Picked Up</option>
+            <option value="BRANCH_RECEIVED">Branch Received</option>
             <option value="COMPLETED">Completed</option>
+            <option value="RETURNED">Returned</option>
           </select>
 
           {(selectedCompany || filterStatus || search) && (
@@ -456,7 +458,7 @@ export default function DeliveriesPage() {
       </div>
 
       {/* Statistics */}
-      <div className="mb-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="mb-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
         <div className="bg-blue-50 dark:bg-slate-800 p-4 rounded-lg">
           <p className="text-sm text-gray-600 dark:text-gray-400">Total</p>
           <p className="text-2xl font-bold text-blue-600 dark:text-blue-400">
@@ -476,6 +478,18 @@ export default function DeliveriesPage() {
               deliveries.filter(
                 (d: Delivery) =>
                   d.status === "ASSIGNED" || d.status === "PICKED_UP"
+              ).length
+            }
+          </p>
+        </div>
+        <div className="bg-orange-50 dark:bg-slate-800 p-4 rounded-lg">
+          <p className="text-sm text-gray-600 dark:text-gray-400">
+            Branch Received
+          </p>
+          <p className="text-2xl font-bold text-orange-600 dark:text-orange-400">
+            {
+              deliveries.filter(
+                (d: Delivery) => d.status === "BRANCH_RECEIVED"
               ).length
             }
           </p>

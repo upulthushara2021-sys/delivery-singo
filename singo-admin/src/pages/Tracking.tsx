@@ -1,6 +1,14 @@
-import { useState } from "react";
-import { Search, MapPin, Loader2 } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Search, MapPin, Loader2, CheckCircle } from "lucide-react";
 import api from "../api/axios";
+import { useAuth } from "../context/AuthContext";
+
+interface Branch {
+  id: number;
+  name: string;
+  district: string;
+  isActive?: boolean;
+}
 
 interface DeliveryTracking {
   id: number;
@@ -48,6 +56,11 @@ export default function Tracking() {
   const [delivery, setDelivery] = useState<DeliveryTracking | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { user } = useAuth();
+  const isAdmin = user?.role === "ADMIN";
+  const isBranchAdmin = user?.role === "BRANCH_ADMIN";
+  const [branches, setBranches] = useState<Branch[]>([]);
+  const [selectedBranchId, setSelectedBranchId] = useState<number | "">("");
 
   const searchDelivery = async () => {
     if (!trackingNumber.trim()) {
@@ -68,6 +81,45 @@ export default function Tracking() {
     }
   };
 
+    const receiveAtBranch = async () => {
+    if (!delivery || !user) return;
+
+    const branchId = isBranchAdmin
+      ? user.branchId
+      : selectedBranchId;
+
+    if (!branchId) {
+      setError(
+        isBranchAdmin
+          ? "Your account is not assigned to a branch."
+          : "Please select a branch before receiving this delivery."
+      );
+      return;
+    }
+
+    try {
+      setLoading(true);
+      setError(null);
+
+      await api.patch(
+        `/tracking/by-number/${encodeURIComponent(delivery.trackingNumber)}/branch`,
+        { branchId: Number(branchId) }
+      );
+
+      const response = await api.get(
+        `/tracking/by-number/${encodeURIComponent(delivery.trackingNumber)}`
+      );
+
+      setDelivery(response.data);
+    } catch (err: any) {
+      setError(
+        err.response?.data?.message || "Could not receive this delivery."
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const getStatusColor = (status: string) => {
     switch (status) {
       case "ASSIGNED":
@@ -82,6 +134,46 @@ export default function Tracking() {
         return "bg-gray-100 text-gray-800";
     }
   };
+
+  useEffect(() => {
+    const loadBranches = async () => {
+      try {
+        const response = await api.get("/branches");
+        const loadedBranches: Branch[] = response.data;
+
+        const activeBranches = loadedBranches.filter(
+          (branch) => branch.isActive !== false
+        );
+
+        setBranches(activeBranches);
+
+        if (isBranchAdmin) {
+          if (!user?.branchId) {
+            setError("Your account is not assigned to a branch.");
+            return;
+          }
+
+          const assignedBranch = activeBranches.find(
+            (branch) => branch.id === Number(user.branchId)
+          );
+
+          if (!assignedBranch) {
+            setError("Your assigned active branch could not be found.");
+            return;
+          }
+
+          setSelectedBranchId(assignedBranch.id);
+        }
+      } catch (err) {
+        console.error("Could not load branches:", err);
+        setError("Could not load branch information.");
+      }
+    };
+
+    if (isAdmin || isBranchAdmin) {
+      loadBranches();
+    }
+  }, [isAdmin, isBranchAdmin, user?.branchId]);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 dark:from-slate-900 dark:to-slate-800 p-4">
@@ -323,6 +415,71 @@ export default function Tracking() {
                   </div>
                 )}
               </div>
+
+              {(isAdmin || isBranchAdmin) &&
+                delivery.status !== "BRANCH_RECEIVED" &&
+                delivery.status !== "COMPLETED" &&
+                delivery.status !== "RETURNED" && (
+                  <div className="mt-8 border-t border-gray-200 dark:border-slate-700 pt-6">
+
+                    {isAdmin && (
+                      <div className="mb-5 max-w-md">
+                        <label className="mb-2 block text-sm font-semibold text-gray-700 dark:text-gray-300">
+                          Select Receiving Branch
+                        </label>
+
+                        <select
+                          value={selectedBranchId}
+                          onChange={(e) =>
+                            setSelectedBranchId(
+                              e.target.value ? Number(e.target.value) : ""
+                            )
+                          }
+                          disabled={loading || branches.length === 0}
+                          className="w-full rounded-lg border border-gray-300 bg-white px-4 py-3 text-gray-800 dark:border-slate-600 dark:bg-slate-800 dark:text-white"
+                        >
+                          <option value="">Choose a branch</option>
+
+                          {branches.map((branch) => (
+                            <option key={branch.id} value={branch.id}>
+                              {branch.name} - {branch.district}
+                            </option>
+                          ))}
+                        </select>
+
+                        {branches.length === 0 && (
+                          <p className="mt-1 text-sm text-red-500">
+                            No active branches available.
+                          </p>
+                        )}
+                      </div>
+                    )}
+
+                    {isBranchAdmin && (
+                      <p className="mb-5 text-sm text-gray-600 dark:text-gray-300">
+                        Receiving branch: Your assigned branch
+                      </p>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={receiveAtBranch}
+                      disabled={
+                        loading ||
+                        (isAdmin && selectedBranchId === "") ||
+                        (isBranchAdmin && !user?.branchId)
+                      }
+                      className="inline-flex items-center gap-2 rounded-lg bg-green-600 px-6 py-3 font-semibold text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {loading ? (
+                        <Loader2 className="h-5 w-5 animate-spin" />
+                      ) : (
+                        <CheckCircle className="h-5 w-5" />
+                      )}
+                      Receive at Branch
+                    </button>
+                  </div>
+                )}
             </div>
           </div>
         )}

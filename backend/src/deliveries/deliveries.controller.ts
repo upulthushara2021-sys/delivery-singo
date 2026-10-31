@@ -33,7 +33,7 @@ export class DeliveriesController {
 
   // COMPANY CREATE DELIVERY
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('COMPANY', 'ADMIN')
+  @Roles('COMPANY', 'ADMIN', 'BRANCH_ADMIN')
   @Post('deliveries')
   createDelivery(@Req() req: any, @Body() body: CreateDeliveryDto) {
     console.log('POST /deliveries - Request user:', req.user);

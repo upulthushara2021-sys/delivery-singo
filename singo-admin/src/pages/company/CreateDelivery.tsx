@@ -12,6 +12,8 @@ export default function CreateDelivery() {
   const navigate = useNavigate();
   const { user } = useAuth();
   const isAdmin = user?.role === "ADMIN";
+  const isBranchAdmin = user?.role === "BRANCH_ADMIN";
+  const canSelectCompany = isAdmin || isBranchAdmin;
   const [branches, setBranches] = useState<Branch[]>([]);
   const [companies, setCompanies] = useState<Company[]>([]);
   const [formData, setFormData] = useState({
@@ -21,8 +23,12 @@ export default function CreateDelivery() {
     amount: "",
     deliveryCharge: "",
     paymentType: "COD",
-    pickupDistrict: "",
-    pickupBranch: "",
+    pickupDistrict: isBranchAdmin
+      ? branches.find((branch) => branch.id === Number(user?.branchId))?.district || ""
+      : "",
+    pickupBranch: isBranchAdmin
+      ? branches.find((branch) => branch.id === Number(user?.branchId))?.name || ""
+      : "",
     dropoffDistrict: "",
     dropoffBranch: "",
     companyId: "",
@@ -36,18 +42,43 @@ export default function CreateDelivery() {
     const loadOptions = async () => {
       try {
         const branchesResponse = await api.get("/branches");
-        setBranches(branchesResponse.data);
-        if (isAdmin) {
+        const loadedBranches: Branch[] = branchesResponse.data;
+        setBranches(loadedBranches);
+
+        if (canSelectCompany) {
           const companiesResponse = await api.get("/admin/companies");
           setCompanies(companiesResponse.data);
         }
+
+        if (isBranchAdmin) {
+          if (!user?.branchId) {
+            setError("Your account is not assigned to a branch.");
+            return;
+          }
+
+          const assignedBranch = loadedBranches.find(
+            (branch) => branch.id === Number(user.branchId)
+          );
+
+          if (!assignedBranch) {
+            setError("Your assigned branch could not be found.");
+            return;
+          }
+
+          setFormData((current) => ({
+            ...current,
+            pickupDistrict: assignedBranch.district,
+            pickupBranch: assignedBranch.name,
+          }));
+        }
       } catch (err) {
-        setError("Could not load branch information");
+        console.error("Could not load delivery options:", err);
+        setError("Could not load branch or company information.");
       }
     };
 
     loadOptions();
-  }, [isAdmin]);
+  }, [canSelectCompany, isBranchAdmin, user?.branchId]);
 
   const handleChange = (
     e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>
@@ -150,7 +181,7 @@ export default function CreateDelivery() {
       !formData.dropoffAddress ||
       !formData.amount || !formData.deliveryCharge ||
       !formData.pickupDistrict || !formData.dropoffDistrict ||
-      (isAdmin && !formData.companyId)
+      (canSelectCompany && !formData.companyId)
     ) {
       setError("All fields are required");
       return;
@@ -173,7 +204,7 @@ export default function CreateDelivery() {
         pickupBranch: formData.pickupBranch,
         dropoffDistrict: formData.dropoffDistrict,
         dropoffBranch: formData.dropoffBranch,
-        ...(isAdmin ? { companyId: Number(formData.companyId) } : {}),
+        ...(canSelectCompany ? { companyId: Number(formData.companyId) } : {}),
       });
 
       window.dispatchEvent(new CustomEvent("dashboard:refresh"));
@@ -194,7 +225,11 @@ export default function CreateDelivery() {
       setWarning("");
       setReturnCount(0);
       setIsCustomerBlocked(false);
-      navigate(isAdmin ? "/admin/dashboard/deliveries" : "/company");
+      navigate(
+        isAdmin || isBranchAdmin
+          ? "/admin/dashboard/deliveries"
+          : "/company"
+      );
     } catch (err: any) {
       console.error("Error:", err);
       const responseMessage = err.response?.data?.message;
@@ -211,7 +246,7 @@ export default function CreateDelivery() {
     <Layout>
       <div className="max-w-2xl mx-auto">
         <h1 className="text-3xl font-bold mb-8 text-gray-800 dark:text-white">
-          {isAdmin ? "Create Delivery for Company" : "Create Delivery"}
+          {canSelectCompany ? "Create Delivery for Company" : "Create Delivery"}
         </h1>
 
         {warning && (
@@ -248,7 +283,7 @@ export default function CreateDelivery() {
         )}
 
         <form onSubmit={handleSubmit} className="bg-white dark:bg-slate-900 p-8 rounded-lg shadow space-y-6">
-          {isAdmin && (
+          {canSelectCompany && (
             <div>
               <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">
                 Company *
@@ -274,9 +309,11 @@ export default function CreateDelivery() {
                 <label className="block text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">
                   {prefix === "pickup" ? "Pickup Branch *" : "Dropoff Branch *"}
                 </label>
+
                 <select
                   value={formData[`${prefix}District`]}
                   onChange={(event) => handleBranchChange(event, prefix)}
+                  disabled={prefix === "pickup" && isBranchAdmin}
                   className="w-full px-4 py-2 border border-gray-300 dark:border-slate-600 rounded-lg dark:bg-slate-800 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
                   required
                 >
@@ -287,6 +324,12 @@ export default function CreateDelivery() {
                     </option>
                   ))}
                 </select>
+
+                {prefix === "pickup" && isBranchAdmin && (
+                  <p className="mt-1 text-xs text-gray-500">
+                    Pickup branch is fixed to your assigned branch.
+                  </p>
+                )}
               </div>
             ))}
           </div>

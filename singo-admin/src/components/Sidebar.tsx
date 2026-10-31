@@ -184,23 +184,61 @@ export default function Sidebar({ isOpen, onClose }: SidebarProps) {
         {user?.role === "BRANCH_ADMIN" && (
           <div className="space-y-1 text-sm">
             <NavLink
+              to="/branch/dashboard"
+              onClick={handleLinkClick}
+              className={({ isActive }) =>
+                `${linkStyle} ${isActive ? activeStyle : ""}`
+              }
+            >
+              <LayoutDashboard size={18} />
+              Branch Dashboard
+            </NavLink>
+
+            <NavLink
               to="/admin/dashboard/drivers"
               onClick={handleLinkClick}
-              className={({ isActive }) => `${linkStyle} ${isActive ? activeStyle : ""}`}
+              className={({ isActive }) =>
+                `${linkStyle} ${isActive ? activeStyle : ""}`
+              }
             >
               <Users size={18} />
               Branch Drivers
             </NavLink>
+
             <NavLink
               to="/admin/dashboard/deliveries"
               onClick={handleLinkClick}
-              className={({ isActive }) => `${linkStyle} ${isActive ? activeStyle : ""}`}
+              className={({ isActive }) =>
+                `${linkStyle} ${isActive ? activeStyle : ""}`
+              }
             >
               <Truck size={18} />
               Branch Deliveries
             </NavLink>
-          </div>
-        )}
+
+            <NavLink
+              to="/admin/dashboard/create-delivery"
+              onClick={handleLinkClick}
+              className={({ isActive }) =>
+                `${linkStyle} ${isActive ? activeStyle : ""}`
+            }
+          >
+            <Plus size={18} />
+            Create Delivery
+          </NavLink>
+
+          <NavLink
+            to="/admin/dashboard/tracking"
+            onClick={handleLinkClick}
+            className={({ isActive }) =>
+              `${linkStyle} ${isActive ? activeStyle : ""}`
+            }
+          >
+            <Map size={18} />
+            Track / Receive Deliveries
+          </NavLink>
+        </div>
+      )}
 
         {/* DRIVER MENU */}
         {user?.role === "DRIVER" && (

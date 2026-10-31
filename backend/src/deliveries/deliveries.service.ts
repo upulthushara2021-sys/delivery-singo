@@ -114,7 +114,6 @@ export class DeliveriesService {
 
   // COMPANY CREATE DELIVERY - FIXED
   async create(userId: number, role: UserRole, body: any) {
-    // Get user with company relation
     const user = await this.userRepo.findOne({
       where: { id: userId },
       relations: ['company'],
@@ -124,25 +123,63 @@ export class DeliveriesService {
       throw new BadRequestException('User not found');
     }
 
-    // Check if user is a company
-    if (role !== UserRole.COMPANY && role !== UserRole.ADMIN) {
-      throw new BadRequestException('Only companies can create deliveries');
+    if (
+      role !== UserRole.COMPANY &&
+      role !== UserRole.ADMIN &&
+      role !== UserRole.BRANCH_ADMIN
+    ) {
+      throw new BadRequestException('You are not allowed to create deliveries');
     }
 
-    // Get companyId
-    const companyId = role === UserRole.ADMIN ? Number(body.companyId) : user.companyId;
+    // COMPANY uses its own company.
+    // ADMIN and BRANCH_ADMIN select a company.
+    const companyId =
+      role === UserRole.COMPANY
+        ? user.companyId
+        : Number(body.companyId);
 
-    if (!companyId) {
-      throw new BadRequestException(
-        'User is not associated with a company. Please register as a company first.'
-      );
+    if (!companyId || !Number.isInteger(Number(companyId))) {
+      throw new BadRequestException('Please select a valid company');
     }
 
-    if (role === UserRole.ADMIN) {
-      const company = await this.companyRepo.findOne({ where: { id: companyId } });
+    // Verify selected company for ADMIN and BRANCH_ADMIN.
+    if (role === UserRole.ADMIN || role === UserRole.BRANCH_ADMIN) {
+      const company = await this.companyRepo.findOne({
+        where: { id: Number(companyId) },
+      });
+
       if (!company) {
         throw new BadRequestException('Selected company was not found');
       }
+    }
+
+    // BRANCH_ADMIN must use their own active branch.
+    let pickupDistrict = body.pickupDistrict;
+    let pickupBranch = body.pickupBranch;
+
+    if (role === UserRole.BRANCH_ADMIN) {
+      if (!user.branchId) {
+        throw new BadRequestException(
+          'Your account is not assigned to a branch',
+        );
+      }
+
+      const assignedBranch = await this.branchRepo.findOne({
+        where: {
+          id: user.branchId,
+          isActive: true,
+        },
+      });
+
+      if (!assignedBranch) {
+        throw new BadRequestException(
+          'Your assigned branch was not found or is inactive',
+        );
+      }
+
+      // Never trust pickup branch values submitted by the browser.
+      pickupDistrict = assignedBranch.district;
+      pickupBranch = assignedBranch.name;
     }
 
     const {
@@ -152,12 +189,12 @@ export class DeliveriesService {
       amount,
       paymentType,
       deliveryCharge,
-      pickupDistrict,
-      pickupBranch,
       dropoffDistrict,
       dropoffBranch,
     } = body;
-    const normalizedCustomerMobile = this.normalizeCustomerMobile(customerMobile);
+
+    const normalizedCustomerMobile =
+      this.normalizeCustomerMobile(customerMobile);
 
     if (
       !customerName ||
@@ -173,15 +210,20 @@ export class DeliveriesService {
       throw new BadRequestException('All delivery fields are required');
     }
 
-    // Check if customer is blacklisted (3+ returns blocks COD)
-    const blacklistedCustomer = await this.findBlacklistRecord(customerMobile, customerName);
+    // Check if customer is blacklisted (3+ returns blocks COD).
+    const blacklistedCustomer = await this.findBlacklistRecord(
+      customerMobile,
+      customerName,
+    );
 
-    if (blacklistedCustomer && blacklistedCustomer.returnCount >= 3) {
-      if (paymentType === PaymentType.COD || paymentType === 'COD') {
-        throw new BadRequestException(
-          `Allowed only PAID delivery. Customer "${blacklistedCustomer.customerName}" has ${blacklistedCustomer.returnCount} returns.`
-        );
-      }
+    if (
+      blacklistedCustomer &&
+      blacklistedCustomer.returnCount >= 3 &&
+      (paymentType === PaymentType.COD || paymentType === 'COD')
+    ) {
+      throw new BadRequestException(
+        `Allowed only PAID delivery. Customer "${blacklistedCustomer.customerName}" has ${blacklistedCustomer.returnCount} returns.`,
+      );
     }
 
     const trackingNumber = this.generateTrackingNumber();
@@ -199,14 +241,12 @@ export class DeliveriesService {
       currentDistrict: pickupDistrict,
       currentBranch: pickupBranch,
       paymentType: paymentType || PaymentType.COD,
-      companyId: companyId,
+      companyId: Number(companyId),
       status: DeliveryStatus.PENDING,
       trackingNumber,
     });
 
-    const savedDelivery = await this.deliveryRepo.save(delivery);
-
-    return savedDelivery;
+    return this.deliveryRepo.save(delivery);
   }
 
   // COMPANY VIEW OWN DELIVERIES - FIXED

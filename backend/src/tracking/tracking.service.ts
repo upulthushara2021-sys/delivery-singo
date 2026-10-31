@@ -100,6 +100,16 @@ export class TrackingService {
       throw new NotFoundException('Tracking number not found');
     }
 
+    if (
+      delivery.status === DeliveryStatus.BRANCH_RECEIVED ||
+      delivery.status === DeliveryStatus.COMPLETED ||
+      delivery.status === DeliveryStatus.RETURNED
+    ) {
+      throw new BadRequestException(
+        `This delivery cannot be received because its current status is ${delivery.status}`,
+      );
+    }
+
     const branch = await this.branchRepo.findOne({
       where: { id: branchId, isActive: true },
     });
