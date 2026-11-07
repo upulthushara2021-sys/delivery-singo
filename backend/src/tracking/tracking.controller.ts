@@ -1,4 +1,4 @@
-import {
+﻿import {
   Controller,
   Get,
   Param,
@@ -49,7 +49,7 @@ export class TrackingController {
 
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('ADMIN', 'BRANCH_ADMIN', 'DRIVER')
+  @Roles('ADMIN', 'BRANCH_ADMIN')
   @Patch('by-number/:trackingNumber/branch')
   receiveAtBranch(
     @Req() req: any,

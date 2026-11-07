@@ -31,6 +31,18 @@ interface TrackedDelivery {
     longitude: number;
     timestamp: Date;
   };
+  transitLegs?: {
+    id: number;
+    legNumber: number;
+    fromBranchId: number;
+    toBranchId: number;
+    driverId: number;
+    status: "PLANNED" | "IN_TRANSIT" | "RECEIVED" | "CANCELLED";
+    assignedAt: string;
+    departedAt?: string;
+    receivedAt?: string;
+    receivedByUserId?: number;
+  }[];
 }
 
 export default function AdminTracking() {
@@ -42,9 +54,20 @@ export default function AdminTracking() {
   const [branches, setBranches] = useState<{ id: number; name: string; district: string }[]>([]);
   const [branchId, setBranchId] = useState("");
   const [arrivalLoading, setArrivalLoading] = useState(false);
-
+  const [drivers, setDrivers] = useState<
+    { id: number; name: string; branchId: number }[]
+    >([]);
+  const [nextBranchId, setNextBranchId] = useState("");
+  const [driverId, setDriverId] = useState("");
+  const [handoverLoading, setHandoverLoading] = useState(false);
   useEffect(() => {
-    api.get("/branches").then((res) => setBranches(res.data || [])).catch(console.error);
+    api.get("/branches")
+      .then((res) => setBranches(res.data || []))
+      .catch(console.error);
+
+    api.get("/admin/drivers")
+      .then((res) => setDrivers(res.data || []))
+      .catch(console.error);
   }, []);
 
   const receiveAtBranch = async (
@@ -69,6 +92,84 @@ export default function AdminTracking() {
       alert(error.response?.data?.message || "Could not receive delivery");
     } finally {
       setArrivalLoading(false);
+    }
+  };
+
+  const handoverToNextBranch = async () => {
+    if (!selectedDelivery || !driverId) {
+      alert("Please select a driver");
+      return;
+    }
+
+    const isFinalBranch =
+      selectedDelivery.currentBranch === selectedDelivery.dropoffBranch;
+
+    if (!isFinalBranch && !nextBranchId) {
+      alert("Please select the next branch");
+      return;
+    }
+
+    try {
+      setHandoverLoading(true);
+
+      if (isFinalBranch) {
+        const currentBranch = branches.find(
+          (branch) => branch.name === selectedDelivery.currentBranch
+        );
+
+        if (!currentBranch) {
+          alert("Current branch not found");
+          return;
+        }
+
+        await api.post("/admin/assign-driver", {
+          deliveryId: selectedDelivery.id,
+          driverId: Number(driverId),
+          assignmentType: "CUSTOMER",
+          branchId: currentBranch.id,
+        });
+
+        alert("Customer delivery driver assigned successfully");
+      } else {
+        const selectedBranch = branches.find(
+          (branch) => branch.id === Number(nextBranchId)
+        );
+
+        if (!selectedBranch) {
+          alert("Selected branch not found");
+          return;
+        }
+
+        if (selectedBranch.name === selectedDelivery.currentBranch) {
+          alert("Choose a different branch");
+          return;
+        }
+
+        await api.patch(
+          `/deliveries/${selectedDelivery.id}/handover`,
+          {
+            toBranchId: Number(nextBranchId),
+            driverId: Number(driverId),
+          }
+        );
+
+        alert("Transit driver assigned successfully");
+      }
+
+      const res = await api.get(
+        `/tracking/by-number/${selectedDelivery.trackingNumber}`
+      );
+
+      setSelectedDelivery(res.data);
+      setNextBranchId("");
+      setDriverId("");
+      loadDeliveries();
+    } catch (error: any) {
+      alert(
+        error.response?.data?.message || "Could not assign the driver"
+      );
+    } finally {
+      setHandoverLoading(false);
     }
   };
 
@@ -318,6 +419,93 @@ export default function AdminTracking() {
                     <button onClick={() => receiveAtBranch()} disabled={!branchId || arrivalLoading} className="bg-amber-600 text-white px-4 py-2 rounded disabled:opacity-50">Receive</button>
                   </div>
                 </div>
+
+                {(
+                  selectedDelivery.status === "BRANCH_RECEIVED" ||
+                  (
+                    selectedDelivery.status === "PICKED_UP" &&
+                    selectedDelivery.currentBranch !== selectedDelivery.dropoffBranch &&
+                    !selectedDelivery.transitLegs?.some(
+                      (leg) => leg.status === "PLANNED" || leg.status === "IN_TRANSIT"
+                    )
+                  )
+                ) && (
+                  <div className="mt-4 p-4 bg-blue-50 dark:bg-slate-800 rounded-lg border border-blue-200 dark:border-blue-600">
+                    <h4 className="font-semibold text-gray-800 dark:text-white mb-3">
+                      {selectedDelivery.currentBranch === selectedDelivery.dropoffBranch
+                        ? "Assign customer delivery driver"
+                        : "Assign next branch transfer"}
+                    </h4>
+
+                    <div className="space-y-3">
+                      {selectedDelivery.currentBranch !== selectedDelivery.dropoffBranch && (
+                        <select
+                          value={nextBranchId}
+                          onChange={(e) => {
+                            setNextBranchId(e.target.value);
+                            setDriverId("");
+                          }}
+                          className="w-full px-3 py-2 border rounded dark:bg-slate-700 dark:text-white"
+                        >
+                          <option value="">Select next branch</option>
+                          {branches
+                            .filter(
+                              (branch) => branch.name !== selectedDelivery.currentBranch
+                            )
+                            .map((branch) => (
+                              <option key={branch.id} value={branch.id}>
+                                {branch.name} ({branch.district})
+                              </option>
+                            ))}
+                        </select>
+                      )}
+
+                      <select
+                        value={driverId}
+                        onChange={(e) => setDriverId(e.target.value)}
+                        className="w-full px-3 py-2 border rounded dark:bg-slate-700 dark:text-white"
+                      >
+                        <option value="">Select driver</option>
+                        {drivers
+                          .filter((driver) => {
+                            const currentBranch = branches.find(
+                              (branch) => branch.name === selectedDelivery.currentBranch
+                            );
+                            return !currentBranch || driver.branchId === currentBranch.id;
+                          })
+                          .map((driver) => (
+                            <option key={driver.id} value={driver.id}>
+                              {driver.name}
+                            </option>
+                          ))}
+                      </select>
+
+                      <button
+                        type="button"
+                        onClick={handoverToNextBranch}
+                        disabled={
+                          !driverId ||
+                          handoverLoading ||
+                          (selectedDelivery.currentBranch !== selectedDelivery.dropoffBranch &&
+                            !nextBranchId)
+                        }
+                        className="w-full bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 disabled:opacity-50"
+                      >
+                        {handoverLoading
+                          ? "Assigning..."
+                          : selectedDelivery.currentBranch === selectedDelivery.dropoffBranch
+                            ? "Assign Customer Delivery Driver"
+                            : "Assign Transit Driver"}
+                      </button>
+
+                      <p className="text-xs text-gray-600 dark:text-gray-400">
+                        {selectedDelivery.currentBranch === selectedDelivery.dropoffBranch
+                          ? "This delivery has reached its final branch. Assign a driver from this branch to deliver it to the customer."
+                          : "Choose the next branch. A driver from the current branch will transport the delivery there."}
+                      </p>
+                    </div>
+                  </div>
+                )}
 
                 <div>
                   <p className="text-sm text-gray-600 dark:text-gray-400">Tracking Number</p>

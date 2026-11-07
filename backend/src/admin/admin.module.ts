@@ -12,6 +12,7 @@ import { Company } from '../companies/company.entity';
 import { Blacklist } from '../blacklist/blacklist.entity';
 import { Settlement } from '../settlements/settlement.entity';
 import { Branch } from '../branches/branch.entity';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import { Branch } from '../branches/branch.entity';
       Settlement,
       Branch,
     ]),
+    NotificationsModule,
   ],
   controllers: [AdminController],
   providers: [PaymentsService, AdminService, SettlementsService],

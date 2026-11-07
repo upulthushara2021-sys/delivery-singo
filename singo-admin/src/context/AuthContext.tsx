@@ -45,6 +45,23 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     setIsLoading(false);
   }, []);
 
+  useEffect(() => {
+    const handleTokenRefreshed = (event: Event) => {
+      const customEvent = event as CustomEvent<{ token?: string }>;
+      const refreshedToken = customEvent.detail?.token;
+
+      if (typeof refreshedToken === "string" && refreshedToken) {
+        setToken(refreshedToken);
+      }
+    };
+
+    window.addEventListener("auth:token-refreshed", handleTokenRefreshed);
+
+    return () => {
+      window.removeEventListener("auth:token-refreshed", handleTokenRefreshed);
+    };
+  }, []);
+
   const login = (data: any) => {
     const accessToken = data.accessToken || data.token;
     const nextRefreshToken = data.refreshToken || data.refresh_token;

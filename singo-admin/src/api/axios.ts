@@ -84,8 +84,14 @@ api.interceptors.response.use(
 
         const newAccessToken = res.data.accessToken || res.data.token;
 
-        if (newAccessToken) {
+        if (typeof newAccessToken === "string" && newAccessToken) {
           localStorage.setItem("token", newAccessToken);
+
+          window.dispatchEvent(
+            new CustomEvent("auth:token-refreshed", {
+              detail: { token: newAccessToken },
+            }),
+          );
         }
 
         if (res.data.refreshToken) {

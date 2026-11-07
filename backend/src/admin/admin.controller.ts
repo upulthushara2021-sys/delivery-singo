@@ -156,6 +156,7 @@ export class AdminController {
     @Body('deliveryId') deliveryId: number,
     @Body('driverId') driverId: number,
     @Body('assignmentType') assignmentType?: DeliveryAssignmentType,
+    @Body('branchId') branchId?: number,
   ) {
     if (!deliveryId || !driverId) {
       throw new BadRequestException('deliveryId and driverId are required');
@@ -165,7 +166,11 @@ export class AdminController {
       deliveryId,
       driverId,
       assignmentType || DeliveryAssignmentType.PICKUP,
-      req.user.role === 'BRANCH_ADMIN' ? req.user.branchId : undefined,
+      req.user.role === 'BRANCH_ADMIN'
+        ? Number(req.user.branchId)
+        : branchId
+          ? Number(branchId)
+          : undefined,
     );
   }
 

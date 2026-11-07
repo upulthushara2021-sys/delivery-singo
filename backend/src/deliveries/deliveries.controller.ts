@@ -18,6 +18,7 @@ import { Roles } from '../common/decorators/roles.decorator';
 import { CreateDeliveryDto } from './dto/create-delivery.dto';
 import { AssignDriverDto } from './dto/assign-driver.dto';
 import { UpdateStatusDto } from './dto/update-status.dto';
+import { HandoverDeliveryDto } from './dto/handover-delivery.dto';
 
 @Controller()
 export class DeliveriesController {
@@ -54,6 +55,27 @@ export class DeliveriesController {
   @Patch('deliveries/:id/assign')
   assignDriver(@Param('id') id: string, @Body() body: AssignDriverDto) {
     return this.deliveriesService.assignDriver(Number(id), body.driverId);
+  }
+
+  // ADMIN / BRANCH ADMIN: HAND OVER DELIVERY TO NEXT BRANCH
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('ADMIN', 'BRANCH_ADMIN')
+  @Patch('deliveries/:id/handover')
+  handoverDelivery(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Body() body: HandoverDeliveryDto,
+  ) {
+    return this.deliveriesService.handoverDelivery(
+      Number(id),
+      body.toBranchId,
+      body.driverId,
+      {
+        userId: req.user.userId,
+        role: req.user.role,
+        branchId: req.user.branchId,
+      },
+    );
   }
 
   // DRIVER SEE ASSIGNED DELIVERIES
@@ -94,7 +116,7 @@ export class DeliveriesController {
 
   // Driver or branch staff enters a delivery with a tracking number and branch
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('ADMIN', 'BRANCH_ADMIN', 'DRIVER')
+  @Roles('ADMIN', 'BRANCH_ADMIN')
   @Post('deliveries/:id/enter')
   async enterDelivery(
     @Req() req: any,

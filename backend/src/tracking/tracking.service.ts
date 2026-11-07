@@ -1,9 +1,10 @@
-import { Injectable } from '@nestjs/common';
+﻿import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Delivery, DeliveryStatus } from '../deliveries/delivery.entity';
 import { Branch } from '../branches/branch.entity';
 import { DeliveryAssignment } from '../deliveries/delivery-assignment.entity';
+import { DeliveryTransitLeg, TransitLegStatus } from '../deliveries/delivery-transit-leg.entity';
 import { DeliveryAssignmentType } from '../deliveries/delivery-assignment.entity';
 import { User, UserRole } from '../users/user.entity';
 import {
@@ -11,6 +12,8 @@ import {
   BadRequestException,
   ForbiddenException,
 } from '@nestjs/common';
+import { NotificationsService } from '../notifications/notifications.service';
+import { NotificationType } from '../notifications/notification.entity';
 
 export interface DriverLocation {
   driverId: number;
@@ -29,12 +32,16 @@ export class TrackingService {
     private deliveryRepo: Repository<Delivery>,
     @InjectRepository(Branch)
     private branchRepo: Repository<Branch>,
+    private notificationsService: NotificationsService,
 
     @InjectRepository(DeliveryAssignment)
     private assignmentRepo: Repository<DeliveryAssignment>,
 
     @InjectRepository(User)
     private userRepo: Repository<User>,
+
+    @InjectRepository(DeliveryTransitLeg)
+    private transitLegRepo: Repository<DeliveryTransitLeg>,
   ) {}
 
   // Persist latest location in memory and to DB
@@ -77,7 +84,78 @@ export class TrackingService {
     return Array.from(this.driverLocations.values());
   }
 
+  private async notifyBranchReceivedRecipients(
+    delivery: Delivery,
+    receivingBranchId: number,
+    transitDriverId?: number,
+  ): Promise<void> {
+    try {
+      const recipients = new Set<number>();
 
+      // Notify active main administrators.
+      const admins = await this.userRepo.find({
+        where: { role: UserRole.ADMIN, isActive: true },
+      });
+
+      admins.forEach((user) => recipients.add(user.id));
+
+      // Notify the delivery's company.
+      if (delivery.companyId) {
+        const companyUsers = await this.userRepo.find({
+          where: {
+            role: UserRole.COMPANY,
+            companyId: delivery.companyId,
+            isActive: true,
+          },
+        });
+
+        companyUsers.forEach((user) => recipients.add(user.id));
+      }
+
+      // Notify administrators of the receiving branch.
+      const branchAdmins = await this.userRepo.find({
+        where: {
+          role: UserRole.BRANCH_ADMIN,
+          branchId: receivingBranchId,
+          isActive: true,
+        },
+      });
+
+      branchAdmins.forEach((user) => recipients.add(user.id));
+
+      // Notify the driver who brought this delivery to the branch.
+      if (transitDriverId) {
+        const driver = await this.userRepo.findOne({
+          where: {
+            id: transitDriverId,
+            role: UserRole.DRIVER,
+            isActive: true,
+          },
+        });
+
+        if (driver) recipients.add(driver.id);
+      }
+
+      await Promise.allSettled(
+        Array.from(recipients).map((userId) =>
+          this.notificationsService.createForUser(
+            userId,
+            'Delivery received at branch',
+            'A delivery has been received at its next branch.',
+            NotificationType.BRANCH_RECEIVED,
+            delivery.id,
+          ),
+        ),
+      );
+    } catch (error) {
+      console.error(
+        `Could not create branch receipt notifications for delivery ${delivery.id}:`,
+        error,
+      );
+    }
+  }
+
+  // Receive Branch
   async receiveAtBranch(
     trackingNumber: string,
     branchId: number,
@@ -132,22 +210,6 @@ export class TrackingService {
       }
     }
 
-    // DRIVER must be assigned to this delivery and belong to
-    // the branch where the delivery is being received.
-    else if (actor.role === UserRole.DRIVER) {
-      if (delivery.driverId !== actor.userId) {
-        throw new ForbiddenException(
-          'You are not assigned to this delivery',
-        );
-      }
-
-      if (!actor.branchId || actor.branchId !== branch.id) {
-        throw new ForbiddenException(
-          'You can only receive deliveries at your assigned branch',
-        );
-      }
-    }
-
     // No other role is permitted.
     else {
       throw new ForbiddenException(
@@ -155,11 +217,56 @@ export class TrackingService {
       );
     }
 
+    const transitLeg = await this.transitLegRepo.findOne({
+      where: {
+        deliveryId: delivery.id,
+        toBranchId: branch.id,
+        status: TransitLegStatus.IN_TRANSIT,
+      },
+    });
+
+    if (transitLeg) {
+      // Later branch: confirm the active incoming transit leg.
+      transitLeg.status = TransitLegStatus.RECEIVED;
+      transitLeg.receivedAt = new Date();
+      transitLeg.receivedByUserId = actor.userId;
+
+      await this.transitLegRepo.save(transitLeg);
+    } else {
+      // First receiving branch: no transit leg exists yet.
+      const previousLegs = await this.transitLegRepo.count({
+        where: { deliveryId: delivery.id },
+      });
+      console.log('FIRST BRANCH RECEIPT CHECK:', {
+        deliveryStatus: delivery.status,
+        currentBranch: delivery.currentBranch,
+        selectedBranch: branch.name,
+        previousLegs,
+      });
+
+      if (
+        delivery.status !== DeliveryStatus.PICKED_UP ||
+        previousLegs > 0
+      ) {
+        throw new BadRequestException(
+          'There is no valid incoming delivery for this branch',
+        );
+      }
+    }
+
     delivery.currentDistrict = branch.district;
     delivery.currentBranch = branch.name;
     delivery.status = DeliveryStatus.BRANCH_RECEIVED;
 
-    return this.deliveryRepo.save(delivery);
+    const saved = await this.deliveryRepo.save(delivery);
+
+    await this.notifyBranchReceivedRecipients(
+      saved,
+      branch.id,
+      transitLeg?.driverId ?? delivery.driverId,
+    );
+
+    return saved;
   }
 
   async getDeliveryTracking(deliveryId: number) {
@@ -268,6 +375,11 @@ export class TrackingService {
       return null;
     }
 
+    const transitLegs = await this.transitLegRepo.find({
+      where: { deliveryId: delivery.id },
+      order: { legNumber: 'ASC' },
+    });
+
     return {
       id: delivery.id,
       trackingNumber: delivery.trackingNumber,
@@ -292,6 +404,18 @@ export class TrackingService {
           }
         : null,
       assignments: delivery.assignments || [],
+      transitLegs: transitLegs.map((leg) => ({
+        id: leg.id,
+        legNumber: leg.legNumber,
+        fromBranchId: leg.fromBranchId,
+        toBranchId: leg.toBranchId,
+        driverId: leg.driverId,
+        status: leg.status,
+        assignedAt: leg.assignedAt,
+        departedAt: leg.departedAt,
+        receivedAt: leg.receivedAt,
+        receivedByUserId: leg.receivedByUserId,
+      })),
       currentLocation: delivery.driverId
         ? this.getDriverLocation(delivery.driverId)
         : delivery.currentLat && delivery.currentLng

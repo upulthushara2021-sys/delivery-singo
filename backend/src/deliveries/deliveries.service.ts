@@ -1,7 +1,8 @@
-import {
+﻿import {
   Injectable,
   BadRequestException,
   NotFoundException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -11,7 +12,10 @@ import { Blacklist } from '../blacklist/blacklist.entity';
 import { User, UserRole } from '../users/user.entity';
 import { Company } from '../companies/company.entity';
 import { DeliveryAssignment, DeliveryAssignmentType } from './delivery-assignment.entity';
+import { DeliveryTransitLeg, TransitLegStatus } from './delivery-transit-leg.entity';
 import { Branch } from '../branches/branch.entity';
+import { NotificationsService } from '../notifications/notifications.service';
+import { NotificationType } from '../notifications/notification.entity';
 
 @Injectable()
 export class DeliveriesService {
@@ -21,6 +25,9 @@ export class DeliveriesService {
 
     @InjectRepository(DeliveryAssignment)
     private assignmentRepo: Repository<DeliveryAssignment>,
+
+    @InjectRepository(DeliveryTransitLeg)
+    private transitLegRepo: Repository<DeliveryTransitLeg>,
 
     @InjectRepository(Blacklist)
     private blacklistRepo: Repository<Blacklist>,
@@ -33,7 +40,122 @@ export class DeliveriesService {
 
     @InjectRepository(Branch)
     private branchRepo: Repository<Branch>,
+
+    private notificationsService: NotificationsService,
   ) {}
+
+  private async notifyDeliveryRecipients(
+    delivery: Delivery,
+    type: NotificationType,
+    title: string,
+    message: string,
+    notifyDriver = true,
+  ): Promise<void> {
+    try {
+      const recipients = new Map<number, User>();
+
+      // 1. Notify all active main admins.
+      const admins = await this.userRepo.find({
+        where: {
+          role: UserRole.ADMIN,
+          isActive: true,
+        },
+      });
+
+      for (const user of admins) {
+        recipients.set(user.id, user);
+      }
+
+      // 2. Notify the company about progress, but not its own creation.
+      if (
+        delivery.companyId &&
+        type !== NotificationType.NEW_DELIVERY
+      ) {
+        const companyUsers = await this.userRepo.find({
+          where: {
+            role: UserRole.COMPANY,
+            companyId: delivery.companyId,
+            isActive: true,
+          },
+        });
+
+        for (const user of companyUsers) {
+          recipients.set(user.id, user);
+        }
+      }
+
+      // 3. Notify the admin of the current branch.
+      const currentBranch = String(delivery.currentBranch || '')
+        .trim()
+        .toLowerCase();
+
+      if (currentBranch) {
+        const matchingBranch = await this.branchRepo.findOne({
+          where: {
+            isActive: true,
+            name: delivery.currentBranch,
+          },
+        });
+
+        if (matchingBranch) {
+          const branchAdmins = await this.userRepo.find({
+            where: {
+              role: UserRole.BRANCH_ADMIN,
+              branchId: matchingBranch.id,
+              isActive: true,
+            },
+          });
+
+          for (const user of branchAdmins) {
+            recipients.set(user.id, user);
+          }
+        }
+      }
+
+      // 4. Notify the driver only when explicitly allowed.
+      if (notifyDriver && delivery.driverId) {
+        const driver = await this.userRepo.findOne({
+          where: {
+            id: delivery.driverId,
+            role: UserRole.DRIVER,
+            isActive: true,
+          },
+        });
+
+        if (driver) {
+          recipients.set(driver.id, driver);
+        }
+      }
+
+      // 5. Save and send notifications.
+      const results = await Promise.allSettled(
+        Array.from(recipients.keys()).map((userId) =>
+          this.notificationsService.createForUser(
+            userId,
+            title,
+            message,
+            type,
+            delivery.id,
+          ),
+        ),
+      );
+
+      const failed = results.filter(
+        (result) => result.status === 'rejected',
+      ).length;
+
+      if (failed > 0) {
+        console.error(
+          `Failed to save ${failed} notification(s) for delivery ${delivery.id}.`,
+        );
+      }
+    } catch (error) {
+      console.error(
+        `Could not create notifications for delivery ${delivery.id}:`,
+        error,
+      );
+    }
+  }
 
   private normalizeCustomerMobile(customerMobile: string): string {
     return String(customerMobile || '').replace(/\D/g, '');
@@ -89,7 +211,7 @@ export class DeliveriesService {
         returnCount: blacklistedCustomer.returnCount,
         customerName: blacklistedCustomer.customerName,
         customerMobile: blacklistedCustomer.customerMobile,
-        message: `❌ BLOCKED (3+ Returns): Customer "${blacklistedCustomer.customerName}" (${blacklistedCustomer.customerMobile}) has ${blacklistedCustomer.returnCount} previous returns. Cash on Delivery (COD) is disabled - Prepaid (PAID) required.`,
+        message: `âŒ BLOCKED (3+ Returns): Customer "${blacklistedCustomer.customerName}" (${blacklistedCustomer.customerMobile}) has ${blacklistedCustomer.returnCount} previous returns. Cash on Delivery (COD) is disabled - Prepaid (PAID) required.`,
       };
     }
 
@@ -99,7 +221,7 @@ export class DeliveriesService {
         returnCount: blacklistedCustomer.returnCount,
         customerName: blacklistedCustomer.customerName,
         customerMobile: blacklistedCustomer.customerMobile,
-        message: `⚠️ WARNING: Customer "${blacklistedCustomer.customerName}" (${blacklistedCustomer.customerMobile}) has returned deliveries ${blacklistedCustomer.returnCount} time(s)! Please verify before creating delivery.`,
+        message: `âš ï¸ WARNING: Customer "${blacklistedCustomer.customerName}" (${blacklistedCustomer.customerMobile}) has returned deliveries ${blacklistedCustomer.returnCount} time(s)! Please verify before creating delivery.`,
       };
     }
 
@@ -246,7 +368,16 @@ export class DeliveriesService {
       trackingNumber,
     });
 
-    return this.deliveryRepo.save(delivery);
+    const saved = await this.deliveryRepo.save(delivery);
+
+    await this.notifyDeliveryRecipients(
+      saved,
+      NotificationType.NEW_DELIVERY,
+      'New delivery',
+      'A new delivery has been created.',
+    );
+
+    return saved;
   }
 
   // COMPANY VIEW OWN DELIVERIES - FIXED
@@ -279,23 +410,9 @@ export class DeliveriesService {
     deliveryNumber: string,
     branchId?: number,
   ) {
-    const delivery = await this.deliveryRepo.findOne({ where: { id: deliveryId } });
-
-    if (!delivery) {
-      throw new NotFoundException('Delivery not found');
-    }
-
-    delivery.trackingNumber = deliveryNumber;
-    delivery.status = DeliveryStatus.BRANCH_RECEIVED;
-
-    if (branchId) {
-      delivery.currentBranch = String(branchId);
-      delivery.currentDistrict = delivery.pickupDistrict || delivery.dropoffDistrict || delivery.currentDistrict;
-    }
-
-    delivery.updatedAt = new Date();
-
-    return this.deliveryRepo.save(delivery);
+    throw new ForbiddenException(
+      'Use the branch receipt endpoint to receive deliveries',
+    );
   }
 
   async trackDelivery(id: number) {
@@ -366,7 +483,16 @@ export class DeliveriesService {
       assignmentType: DeliveryAssignmentType.PICKUP,
     }));
 
-    return this.deliveryRepo.save(delivery);
+    const saved = await this.deliveryRepo.save(delivery);
+
+    await this.notifyDeliveryRecipients(
+      saved,
+      NotificationType.DRIVER_ASSIGNED,
+      'Driver assigned',
+      'A driver has been assigned to this delivery.',
+    );
+
+    return saved;
   }
 
   // DRIVER VIEW ASSIGNED DELIVERIES - FIXED
@@ -381,7 +507,6 @@ export class DeliveriesService {
   }
 
   // DRIVER UPDATE STATUS
-
   async updateStatus(
     id: number,
     status: DeliveryStatus,
@@ -401,8 +526,83 @@ export class DeliveriesService {
       );
     }
 
-    delivery.status = status;
-    return this.deliveryRepo.save(delivery);
+    const assignment = await this.assignmentRepo.findOne({
+      where: { deliveryId: id, driverId },
+      order: { assignedAt: 'DESC' },
+    });
+
+    if (!assignment) {
+      throw new BadRequestException(
+        'No valid driver assignment found',
+      );
+    }
+
+    if (status === DeliveryStatus.PICKED_UP) {
+      if (delivery.status !== DeliveryStatus.ASSIGNED) {
+        throw new BadRequestException(
+          'Only assigned deliveries can be picked up',
+        );
+      }
+
+      if (assignment.assignmentType === DeliveryAssignmentType.TRANSIT) {
+        const leg = await this.transitLegRepo.findOne({
+          where: {
+            deliveryId: id,
+            driverId,
+            status: TransitLegStatus.PLANNED,
+          },
+        });
+
+        if (!leg) {
+          throw new BadRequestException(
+            'No planned transit leg found for this driver',
+          );
+        }
+
+        leg.status = TransitLegStatus.IN_TRANSIT;
+        leg.departedAt = new Date();
+        await this.transitLegRepo.save(leg);
+      }
+
+      delivery.status = DeliveryStatus.PICKED_UP;
+    } else if (status === DeliveryStatus.COMPLETED) {
+      if (delivery.status !== DeliveryStatus.PICKED_UP) {
+        throw new BadRequestException(
+          'Delivery must be picked up before completion',
+        );
+      }
+
+      const isCustomerDelivery =
+        assignment.assignmentType === DeliveryAssignmentType.CUSTOMER;
+
+      const isSameBranchDelivery =
+        assignment.assignmentType === DeliveryAssignmentType.PICKUP &&
+        delivery.pickupBranch === delivery.dropoffBranch;
+
+      if (!isCustomerDelivery && !isSameBranchDelivery) {
+        throw new BadRequestException(
+          'This driver cannot complete a branch-transfer delivery',
+        );
+      }
+
+      delivery.status = DeliveryStatus.COMPLETED;
+    } else {
+      throw new BadRequestException(
+        'Drivers can only pick up or complete eligible deliveries',
+      );
+    }
+
+    const saved = await this.deliveryRepo.save(delivery);
+
+    await this.notifyDeliveryRecipients(
+      delivery,
+      NotificationType.STATUS_CHANGED,
+      'Delivery status updated',
+      `Delivery ${delivery.trackingNumber} status has been updated.`,
+      false,
+    );
+
+    return saved;
   }
 
   // DRIVER RETURN DELIVERY (only for COD)
@@ -426,9 +626,24 @@ export class DeliveriesService {
       throw new BadRequestException('Only COD deliveries can be returned');
     }
 
+    // Prevent a delivery from being returned more than once.
+    if (delivery.status === DeliveryStatus.RETURNED) {
+      throw new BadRequestException(
+        'This delivery has already been returned',
+      );
+    }
+
     // Update delivery status
     delivery.status = DeliveryStatus.RETURNED;
-    await this.deliveryRepo.save(delivery);
+    const saved = await this.deliveryRepo.save(delivery);
+
+    await this.notifyDeliveryRecipients(
+      delivery,
+      NotificationType.DELIVERY_RETURNED,
+      'Delivery returned',
+      `Delivery ${delivery.trackingNumber} has been returned.`,
+      false,
+    );
 
     // Add to blacklist
     const normalizedCustomerMobile = this.normalizeCustomerMobile(delivery.customerMobile);
@@ -487,7 +702,7 @@ export class DeliveriesService {
 
     // Only update if delivery is in an allowed status (business rule)
     if (![DeliveryStatus.ASSIGNED, DeliveryStatus.PICKED_UP, DeliveryStatus.PENDING].includes(delivery.status)) {
-      // allowed, but you can restrict — for now we'll update anyway
+      // allowed, but you can restrict â€” for now we'll update anyway
     }
 
     delivery.currentLat = Number(latitude);
@@ -500,6 +715,145 @@ export class DeliveriesService {
       latitude: delivery.currentLat,
       longitude: delivery.currentLng,
       timestamp: new Date(),
+    };
+  }
+
+  // BRANCH ADMIN: assign a delivery to the next branch
+  async handoverDelivery(
+    deliveryId: number,
+    toBranchId: number,
+    driverId: number,
+    actor: { userId: number; role: UserRole; branchId?: number },
+  ) {
+    const delivery = await this.deliveryRepo.findOne({
+      where: { id: deliveryId },
+    });
+
+    if (!delivery) {
+      throw new NotFoundException('Delivery not found');
+    }
+
+    if (
+      delivery.status !== DeliveryStatus.PICKED_UP &&
+      delivery.status !== DeliveryStatus.BRANCH_RECEIVED
+    ) {
+      throw new BadRequestException(
+        'Delivery must be picked up or received at a branch before handover',
+      );
+    }
+
+    const fromBranch = await this.branchRepo.findOne({
+      where: { name: delivery.currentBranch, isActive: true },
+    });
+
+    if (!fromBranch) {
+      throw new BadRequestException('Current active branch not found');
+    }
+
+    if (
+      actor.role === UserRole.BRANCH_ADMIN &&
+      actor.branchId !== fromBranch.id
+    ) {
+      throw new ForbiddenException(
+        'You can only hand over deliveries from your own branch',
+      );
+    }
+
+    if (
+      actor.role !== UserRole.ADMIN &&
+      actor.role !== UserRole.BRANCH_ADMIN
+    ) {
+      throw new ForbiddenException('You are not allowed to hand over deliveries');
+    }
+
+    const toBranch = await this.branchRepo.findOne({
+      where: { id: toBranchId, isActive: true },
+    });
+
+    if (!toBranch) {
+      throw new BadRequestException('Destination branch is not active or does not exist');
+    }
+
+    if (toBranch.id === fromBranch.id) {
+      throw new BadRequestException(
+        'Destination branch must be different from the current branch',
+      );
+    }
+
+    const driver = await this.userRepo.findOne({
+      where: {
+        id: driverId,
+        role: UserRole.DRIVER,
+        branchId: fromBranch.id,
+        isActive: true,
+      },
+    });
+
+    if (!driver) {
+      throw new BadRequestException(
+        'Select an active driver assigned to the sending branch',
+      );
+    }
+
+    const activeLeg = await this.transitLegRepo.findOne({
+      where: [
+        { deliveryId, status: TransitLegStatus.PLANNED },
+        { deliveryId, status: TransitLegStatus.IN_TRANSIT },
+      ],
+    });
+
+    if (activeLeg) {
+      throw new BadRequestException(
+        'This delivery already has an active transit leg',
+      );
+    }
+
+    const previousLeg = await this.transitLegRepo.findOne({
+      where: { deliveryId },
+      order: { legNumber: 'DESC' },
+    });
+
+    const leg = this.transitLegRepo.create({
+      deliveryId,
+      delivery,
+      fromBranchId: fromBranch.id,
+      fromBranch,
+      toBranchId: toBranch.id,
+      toBranch,
+      driverId: driver.id,
+      driver,
+      legNumber: (previousLeg?.legNumber || 0) + 1,
+      status: TransitLegStatus.PLANNED,
+    });
+
+    await this.transitLegRepo.save(leg);
+
+    await this.assignmentRepo.save(
+      this.assignmentRepo.create({
+        deliveryId,
+        delivery,
+        driverId: driver.id,
+        driver,
+        assignmentType: DeliveryAssignmentType.TRANSIT,
+      }),
+    );
+
+    delivery.driverId = driver.id;
+    delivery.status = DeliveryStatus.ASSIGNED;
+
+    const saved = await this.deliveryRepo.save(delivery);
+
+    await this.notifyDeliveryRecipients(
+      saved,
+      NotificationType.DRIVER_ASSIGNED,
+      'Transit driver assigned',
+      'A driver has been assigned for the next branch transfer.',
+    );
+
+    return {
+      message: 'Transit driver assigned successfully',
+      delivery: saved,
+      transitLeg: leg,
     };
   }
 }

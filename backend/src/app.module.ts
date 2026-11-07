@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+﻿import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ConfigModule } from '@nestjs/config';
 
@@ -16,18 +16,20 @@ import { AnalyticsModule } from './analytics/analytics.module';
 import { User } from './users/user.entity';
 import { Delivery } from './deliveries/delivery.entity';
 import { DeliveryAssignment } from './deliveries/delivery-assignment.entity';
+import { DeliveryTransitLeg } from './deliveries/delivery-transit-leg.entity';
 import { Blacklist } from './blacklist/blacklist.entity';
 import { Settlement } from './settlements/settlement.entity';
 import { Driver } from './drivers/driver.entity';
 import { Company } from './companies/company.entity';
 import { Branch } from './branches/branch.entity';
+import { Notification } from './notifications/notification.entity';
 
 import { LocationGateway } from './admin/location.gateway';
-import { NotificationsGateway } from './admin/notifications.gateway';
+import { NotificationsModule } from './notifications/notifications.module';
 import { BranchesModule } from './branches/branches.module';
 
 @Module({
-  providers: [LocationGateway, NotificationsGateway],
+  providers: [LocationGateway],
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
 
@@ -38,7 +40,7 @@ import { BranchesModule } from './branches/branches.module';
       username: process.env.DB_USER || 'postgres',
       password: process.env.DB_PASSWORD || '',
       database: process.env.DB_NAME || 'delivery-singo',
-      entities: [User, Delivery, DeliveryAssignment, Blacklist, Settlement, Driver, Company, Branch],
+      entities: [User, Delivery, DeliveryAssignment, DeliveryTransitLeg, Blacklist, Settlement, Driver, Company, Branch, Notification],
       synchronize: true,
       logging: false,
     }),
@@ -54,6 +56,7 @@ import { BranchesModule } from './branches/branches.module';
     DriversModule,
     AnalyticsModule,
     BranchesModule,
+    NotificationsModule,
   ],
 })
 export class AppModule {}

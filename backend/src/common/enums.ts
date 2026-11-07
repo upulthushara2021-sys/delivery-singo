@@ -23,4 +23,3 @@ export enum UserRole {
   DRIVER = 'DRIVER',
   COMPANY = 'COMPANY',
 }
-

@@ -10,6 +10,8 @@ import { DeliveryAssignment, DeliveryAssignmentType } from '../deliveries/delive
 import { Blacklist } from '../blacklist/blacklist.entity';
 import { Settlement } from '../settlements/settlement.entity';
 import * as bcrypt from 'bcrypt';
+import { NotificationsService } from '../notifications/notifications.service';
+import { NotificationType } from '../notifications/notification.entity';
 
 @Injectable()
 export class AdminService {
@@ -34,6 +36,8 @@ export class AdminService {
 
     @InjectRepository(Branch)
     private branchRepo: Repository<Branch>,
+
+    private notificationsService: NotificationsService,
   ) {}
 
   // =============================
@@ -337,6 +341,45 @@ export class AdminService {
       throw new NotFoundException('Driver not found');
     }
 
+    if (assignmentType === DeliveryAssignmentType.CUSTOMER) {
+      if (delivery.status !== DeliveryStatus.BRANCH_RECEIVED) {
+        throw new BadRequestException(
+          'Delivery must be received at the final branch first',
+        );
+      }
+
+      if (
+        !delivery.currentBranch ||
+        delivery.currentBranch !== delivery.dropoffBranch
+      ) {
+        throw new BadRequestException(
+          'Customer delivery can only be assigned from the final branch',
+        );
+      }
+
+      if (!branchId) {
+        throw new BadRequestException(
+          'Final branch is required for customer delivery assignment',
+        );
+      }
+
+      const finalBranch = await this.branchRepo.findOne({
+        where: { name: delivery.currentBranch, isActive: true },
+      });
+
+      if (!finalBranch || finalBranch.id !== branchId) {
+        throw new BadRequestException(
+          'You can only assign customer delivery from the current final branch',
+        );
+      }
+
+      if (driver.branchId !== finalBranch.id) {
+        throw new BadRequestException(
+          'Customer delivery driver must belong to the final branch',
+        );
+      }
+    }
+
     if (branchId && driver.branchId !== branchId) {
       throw new BadRequestException('Driver belongs to another branch');
     }
@@ -355,7 +398,14 @@ export class AdminService {
     }
 
     delivery.driverId = driverId;
-    if (delivery.status === DeliveryStatus.PENDING) {
+
+    if (
+      delivery.status === DeliveryStatus.PENDING ||
+      (
+        assignmentType === DeliveryAssignmentType.CUSTOMER &&
+        delivery.status === DeliveryStatus.BRANCH_RECEIVED
+      )
+    ) {
       delivery.status = DeliveryStatus.ASSIGNED;
     }
 
@@ -368,7 +418,100 @@ export class AdminService {
     });
     await this.assignmentRepo.save(assignment);
 
-    return this.deliveryRepo.save(delivery);
+    const savedDelivery = await this.deliveryRepo.save(delivery);
+
+    // Notify relevant users after successful assignment.
+    await this.notifyDriverAssignedRecipients(
+      savedDelivery,
+      driver,
+      branchId ?? driver.branchId,
+      assignmentType,
+    );
+
+    return savedDelivery;
+  }
+
+  private async notifyDriverAssignedRecipients(
+    delivery: Delivery,
+    driver: User,
+    relevantBranchId: number | undefined,
+    assignmentType: DeliveryAssignmentType,
+  ): Promise<void> {
+    try {
+      const recipients = new Set<number>();
+
+      // Notify active main administrators.
+      const admins = await this.userRepo.find({
+        where: { role: UserRole.ADMIN, isActive: true },
+      });
+
+      admins.forEach((user) => recipients.add(user.id));
+
+      // Notify the delivery's company.
+      if (delivery.companyId) {
+        const companyUsers = await this.userRepo.find({
+          where: {
+            role: UserRole.COMPANY,
+            companyId: delivery.companyId,
+            isActive: true,
+          },
+        });
+
+        companyUsers.forEach((user) => recipients.add(user.id));
+      }
+
+      // Notify administrators of the relevant branch.
+      if (relevantBranchId) {
+        const branchAdmins = await this.userRepo.find({
+          where: {
+            role: UserRole.BRANCH_ADMIN,
+            branchId: relevantBranchId,
+            isActive: true,
+          },
+        });
+
+        branchAdmins.forEach((user) => recipients.add(user.id));
+      }
+
+      // Notify the newly assigned driver.
+      if (driver.isActive) {
+        recipients.add(driver.id);
+      }
+
+      const assignmentName =
+        assignmentType === DeliveryAssignmentType.CUSTOMER
+          ? 'customer delivery'
+          : assignmentType === DeliveryAssignmentType.TRANSIT
+            ? 'transit delivery'
+            : 'pickup delivery';
+
+      const results = await Promise.allSettled(
+        Array.from(recipients).map((userId) =>
+          this.notificationsService.createForUser(
+            userId,
+            'Driver assigned',
+            `A driver has been assigned for ${assignmentName} #${delivery.id}.`,
+            NotificationType.DRIVER_ASSIGNED,
+            delivery.id,
+          ),
+        ),
+      );
+
+      const failed = results.filter(
+        (result) => result.status === 'rejected',
+      ).length;
+
+      if (failed > 0) {
+        console.error(
+          `Failed to send ${failed} assignment notifications for delivery ${delivery.id}`,
+        );
+      }
+    } catch (error) {
+      console.error(
+        `Could not create driver assignment notifications for delivery ${delivery.id}:`,
+        error,
+      );
+    }
   }
 
   // =============================
@@ -464,5 +607,4 @@ export class AdminService {
 
     return { message: 'Company deleted successfully' };
   }
-
 }

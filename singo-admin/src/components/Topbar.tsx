@@ -1,5 +1,6 @@
-import { useAuth } from "../context/AuthContext";
-import { Menu, Bell, User, LogOut } from "lucide-react";
+﻿import { useAuth } from "../context/AuthContext";
+import { Menu, User, LogOut } from "lucide-react";
+import NotificationBell from "./NotificationBell";
 
 interface TopbarProps {
   onMenuClick: () => void;
@@ -64,10 +65,8 @@ export default function Topbar({ onMenuClick, onLogout }: TopbarProps) {
       {/* Right: Notifications & User Profile */}
       <div className="flex shrink-0 items-center gap-2 sm:gap-6">
         {/* Notifications */}
-        <button className="p-2 hover:bg-gray-100 dark:hover:bg-slate-800 rounded-lg transition relative" title="Notifications">
-          <Bell size={20} className="text-gray-700 dark:text-gray-300" />
-          <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full"></span>
-        </button>
+        <NotificationBell />
+
 
         {/* User Profile Section */}
         <div className="flex items-center gap-3 pl-2 sm:pl-6 border-l border-gray-200 dark:border-slate-700">
