@@ -37,6 +37,11 @@ export default function CreateDelivery() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [warning, setWarning] = useState("");
+  const [mobileMatched, setMobileMatched] = useState(false);
+  const [mobileReturnCount, setMobileReturnCount] = useState(0);
+  const [nameMatched, setNameMatched] = useState(false);
+  const [nameReturnCount, setNameReturnCount] = useState(0);
+  const [isCustomerBlocked, setIsCustomerBlocked] = useState(false);
 
   useEffect(() => {
     const loadOptions = async () => {
@@ -89,16 +94,16 @@ export default function CreateDelivery() {
     });
   };
 
-  const [returnCount, setReturnCount] = useState(0);
-  const [isCustomerBlocked, setIsCustomerBlocked] = useState(false);
-
   const checkBlacklistStatus = async (
     mobile = formData.customerMobile,
     name = formData.customerName,
     showAlert = false,
   ) => {
-    if (!mobile && !name) {
-      setReturnCount(0);
+    if (!mobile.trim() && !name.trim()) {
+      setMobileMatched(false);
+      setMobileReturnCount(0);
+      setNameMatched(false);
+      setNameReturnCount(0);
       setIsCustomerBlocked(false);
       setWarning("");
       return false;
@@ -106,6 +111,7 @@ export default function CreateDelivery() {
 
     try {
       let res;
+
       try {
         res = await api.post("/check-blacklist", {
           customerMobile: mobile,
@@ -118,27 +124,43 @@ export default function CreateDelivery() {
         });
       }
 
-      const count = res.data.returnCount || 0;
-      setReturnCount(count);
+      const mobileCount = Number(res.data.mobileReturnCount || 0);
+      const nameCount = Number(res.data.nameReturnCount || 0);
 
-      if (res.data.isBlocked || count >= 3) {
-        setIsCustomerBlocked(true);
-        const message = res.data.message || `Allowed only PAID delivery. Customer has ${count} returns.`;
+      const mobileMatch = Boolean(res.data.mobileMatched);
+      const nameMatch = Boolean(res.data.nameMatched);
+
+      setMobileMatched(mobileMatch);
+      setMobileReturnCount(mobileCount);
+
+      setNameMatched(nameMatch);
+      setNameReturnCount(nameCount);
+
+      // Only a mobile-number match can block COD.
+      const blocked = mobileMatch && mobileCount >= 3;
+
+      setIsCustomerBlocked(blocked);
+
+      if (blocked) {
+        const message =
+          res.data.message ||
+          `Allowed only PAID delivery. This mobile number has ${mobileCount} returns.`;
+
         setWarning(message);
-        setFormData((current) => ({ ...current, paymentType: "PAID" }));
+
+        setFormData((current) => ({
+          ...current,
+          paymentType: "PAID",
+        }));
+
         if (showAlert) {
           window.alert(message);
         }
-        return true;
-      } else if (count > 0) {
-        setIsCustomerBlocked(false);
-        const message = res.data.message || `⚠️ WARNING: Customer has ${count} return(s) in blacklist!`;
-        setWarning(message);
       } else {
-        setIsCustomerBlocked(false);
         setWarning("");
       }
-      return false;
+
+      return blocked;
     } catch (error) {
       console.error("Blacklist check failed:", error);
       return false;
@@ -152,7 +174,10 @@ export default function CreateDelivery() {
     if (mobile.length >= 3 || name.length >= 3) {
       checkBlacklistStatus(mobile, name);
     } else {
-      setReturnCount(0);
+      setMobileMatched(false);
+      setMobileReturnCount(0);
+      setNameMatched(false);
+      setNameReturnCount(0);
       setIsCustomerBlocked(false);
       setWarning("");
     }
@@ -223,7 +248,8 @@ export default function CreateDelivery() {
         companyId: "",
       });
       setWarning("");
-      setReturnCount(0);
+      setMobileReturnCount(0);
+      setNameReturnCount(0);
       setIsCustomerBlocked(false);
       navigate(
         isAdmin || isBranchAdmin
@@ -346,27 +372,21 @@ export default function CreateDelivery() {
               onChange={handleChange}
               placeholder="Enter customer name"
               className={`w-full px-4 py-2 border rounded-lg dark:bg-slate-800 dark:text-white focus:outline-none focus:ring-2 ${
-                isCustomerBlocked
-                  ? "border-red-500 focus:ring-red-500"
-                  : returnCount > 0
+                nameMatched
                   ? "border-amber-500 focus:ring-amber-500"
                   : "border-gray-300 dark:border-slate-600 focus:ring-blue-500"
               }`}
               required
             />
-            {returnCount > 0 && (
-              <div
-                className={`mt-2 p-3 rounded-lg flex items-center gap-2 text-sm font-semibold ${
-                  isCustomerBlocked
-                    ? "bg-red-100 text-red-800 border border-red-300 dark:bg-red-900/30 dark:text-red-200"
-                    : "bg-amber-100 text-amber-800 border border-amber-300 dark:bg-amber-900/30 dark:text-amber-200"
-                }`}
-              >
+
+            {nameMatched && (
+              <div className="mt-2 p-3 rounded-lg flex items-center gap-2 text-sm font-semibold bg-amber-100 text-amber-800 border border-amber-300 dark:bg-amber-900/30 dark:text-amber-200">
                 <AlertCircle size={18} className="shrink-0" />
                 <span>
-                  {isCustomerBlocked
-                    ? `❌ Allowed only PAID delivery. Customer has ${returnCount} previous returned deliveries.`
-                    : `⚠️ Notice: Customer has ${returnCount} returned delivery history recorded!`}
+                  ⚠️ Customer name matches a blacklist record
+                  {nameReturnCount > 0
+                    ? ` (${nameReturnCount} previous return(s)).`
+                    : "."}
                 </span>
               </div>
             )}
@@ -386,13 +406,14 @@ export default function CreateDelivery() {
               className={`w-full px-4 py-2 border rounded-lg dark:bg-slate-800 dark:text-white focus:outline-none focus:ring-2 ${
                 isCustomerBlocked
                   ? "border-red-500 focus:ring-red-500"
-                  : returnCount > 0
+                  : mobileMatched
                   ? "border-amber-500 focus:ring-amber-500"
                   : "border-gray-300 dark:border-slate-600 focus:ring-blue-500"
               }`}
               required
             />
-            {returnCount > 0 && (
+
+            {mobileMatched && (
               <div
                 className={`mt-2 p-3 rounded-lg flex items-center gap-2 text-sm font-semibold ${
                   isCustomerBlocked
@@ -403,8 +424,8 @@ export default function CreateDelivery() {
                 <AlertCircle size={18} className="shrink-0" />
                 <span>
                   {isCustomerBlocked
-                    ? `❌ Allowed only PAID delivery. Customer has ${returnCount} previous returned deliveries.`
-                    : `⚠️ Notice: Customer phone number matched blacklist (${returnCount} return(s)).`}
+                    ? `❌ Allowed only PAID delivery. This mobile number has ${mobileReturnCount} previous returns.`
+                    : `⚠️ This mobile number matches a blacklist record (${mobileReturnCount} return(s)).`}
                 </span>
               </div>
             )}

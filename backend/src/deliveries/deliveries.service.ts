@@ -1,4 +1,4 @@
-﻿import {
+import {
   Injectable,
   BadRequestException,
   NotFoundException,
@@ -161,72 +161,83 @@ export class DeliveriesService {
     return String(customerMobile || '').replace(/\D/g, '');
   }
 
-  private async findBlacklistRecord(customerMobile?: string, customerName?: string): Promise<Blacklist | null> {
-    const rawMobile = String(customerMobile || '').trim();
+  private async findBlacklistMatches(
+    customerMobile?: string,
+    customerName?: string,
+  ) {
     const normalizedMobile = this.normalizeCustomerMobile(customerMobile || '');
     const trimmedName = String(customerName || '').trim().toLowerCase();
-
-    // Fetch all blacklist records from DB
     const allBlacklist = await this.blacklistRepo.find();
 
+    let mobileRecord: Blacklist | null = null;
+    let nameRecord: Blacklist | null = null;
+
     for (const item of allBlacklist) {
-      const dbMobile = String(item.customerMobile || '').trim();
-      const dbNormMobile = this.normalizeCustomerMobile(dbMobile);
+      const dbMobile = this.normalizeCustomerMobile(item.customerMobile || '');
       const dbName = String(item.customerName || '').trim().toLowerCase();
 
-      // Check mobile match
-      if (normalizedMobile.length >= 5 && dbNormMobile.length >= 5) {
+      if (!mobileRecord && normalizedMobile.length >= 5 && dbMobile.length >= 5) {
         if (
-          dbNormMobile === normalizedMobile ||
-          dbMobile === rawMobile ||
-          dbNormMobile.endsWith(normalizedMobile.slice(-9)) ||
-          normalizedMobile.endsWith(dbNormMobile.slice(-9))
+          dbMobile === normalizedMobile ||
+          dbMobile.endsWith(normalizedMobile.slice(-9)) ||
+          normalizedMobile.endsWith(dbMobile.slice(-9))
         ) {
-          return item;
+          mobileRecord = item;
         }
       }
 
-      // Check name match
-      if (trimmedName.length >= 3 && dbName.length >= 3) {
+      if (!nameRecord && trimmedName.length >= 3 && dbName.length >= 3) {
         if (
           dbName === trimmedName ||
           dbName.includes(trimmedName) ||
           trimmedName.includes(dbName)
         ) {
-          return item;
+          nameRecord = item;
         }
       }
     }
-
-    return null;
+    return { mobileRecord, nameRecord };
   }
 
   // CHECK IF CUSTOMER IS BLACKLISTED
   async checkBlacklist(customerMobile?: string, customerName?: string) {
-    const blacklistedCustomer = await this.findBlacklistRecord(customerMobile, customerName);
+    const { mobileRecord, nameRecord } =
+      await this.findBlacklistMatches(customerMobile, customerName);
 
-    if (blacklistedCustomer && blacklistedCustomer.returnCount >= 3) {
-      return {
-        isBlocked: true,
-        returnCount: blacklistedCustomer.returnCount,
-        customerName: blacklistedCustomer.customerName,
-        customerMobile: blacklistedCustomer.customerMobile,
-        message: `âŒ BLOCKED (3+ Returns): Customer "${blacklistedCustomer.customerName}" (${blacklistedCustomer.customerMobile}) has ${blacklistedCustomer.returnCount} previous returns. Cash on Delivery (COD) is disabled - Prepaid (PAID) required.`,
-      };
-    }
+    const mobileReturnCount = mobileRecord?.returnCount || 0;
+    const nameReturnCount = nameRecord?.returnCount || 0;
 
-    if (blacklistedCustomer && blacklistedCustomer.returnCount > 0) {
-      return {
-        isBlocked: false,
-        returnCount: blacklistedCustomer.returnCount,
-        customerName: blacklistedCustomer.customerName,
-        customerMobile: blacklistedCustomer.customerMobile,
-        message: `âš ï¸ WARNING: Customer "${blacklistedCustomer.customerName}" (${blacklistedCustomer.customerMobile}) has returned deliveries ${blacklistedCustomer.returnCount} time(s)! Please verify before creating delivery.`,
-      };
-    }
+    // Only a mobile-number match can block COD.
+    const isBlocked = mobileReturnCount >= 3;
 
-    return { isBlocked: false, returnCount: 0, customerName: '', customerMobile: '', message: '' };
+    return {
+      isBlocked,
+
+      // Mobile match information
+      mobileMatched: !!mobileRecord,
+      mobileReturnCount,
+      matchedMobile: mobileRecord?.customerMobile || '',
+
+      // Name match information
+      nameMatched: !!nameRecord,
+      nameReturnCount,
+      matchedName: nameRecord?.customerName || '',
+
+      // Backward-compatible fields
+      returnCount: mobileReturnCount,
+      customerName: mobileRecord?.customerName || '',
+      customerMobile: mobileRecord?.customerMobile || '',
+
+      message: isBlocked
+        ? `BLOCKED: This mobile number has ${mobileReturnCount} previous returns. PAID delivery is required.`
+        : mobileReturnCount > 0
+          ? `WARNING: This mobile number has ${mobileReturnCount} previous returns.`
+          : nameReturnCount > 0
+            ? `WARNING: This customer name matches a blacklist record.`
+            : '',
+    };
   }
+
 
   private generateTrackingNumber(): string {
     const timestamp = Date.now();
@@ -333,18 +344,18 @@ export class DeliveriesService {
     }
 
     // Check if customer is blacklisted (3+ returns blocks COD).
-    const blacklistedCustomer = await this.findBlacklistRecord(
+    const { mobileRecord } = await this.findBlacklistMatches(
       customerMobile,
       customerName,
     );
 
     if (
-      blacklistedCustomer &&
-      blacklistedCustomer.returnCount >= 3 &&
-      (paymentType === PaymentType.COD || paymentType === 'COD')
+      mobileRecord &&
+      mobileRecord.returnCount >= 3 &&
+      (paymentType || PaymentType.COD) === PaymentType.COD
     ) {
       throw new BadRequestException(
-        `Allowed only PAID delivery. Customer "${blacklistedCustomer.customerName}" has ${blacklistedCustomer.returnCount} returns.`,
+        `Allowed only PAID delivery. This mobile number has ${mobileRecord.returnCount} returns.`,
       );
     }
 
